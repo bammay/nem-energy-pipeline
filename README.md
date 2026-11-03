@@ -6,7 +6,13 @@ AEMO aggregated price and demand data: 5-minute regional wholesale price (RRP, $
 
 ## Project structure
 - `src/download_aemo.py`: downloads a month of price and demand data for all five regions into `data/raw/`. Re-running it is safe: files that already exist are skipped (idempotent).
-- `notebooks/01_explore_aemo.ipynb`: first look at the data.
+- `notebooks/01_explore_aemo.py`: first look at the data.
+
+## First findings (October 2026)
+![Average price by hour](docs/price_by_hour.png)
+- South Australia's average price goes negative between about 10am and 3pm, driven by rooftop solar.
+- Prices rise sharply from about 5pm as solar drops off and household demand peaks.
+- NSW's 2pm average is pushed up by a small number of extreme price intervals.
 
 ## How to run
 1. Create and activate a virtual environment, then install dependencies:
