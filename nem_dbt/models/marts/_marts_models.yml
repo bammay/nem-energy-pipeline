@@ -1,0 +1,44 @@
+version: 2
+
+models:
+  - name: dim_region
+    description: One row per NEM region.
+    columns:
+      - name: region_code
+        data_tests: [unique, not_null]
+
+  - name: dim_date
+    description: One row per calendar day in the data.
+    columns:
+      - name: date_day
+        data_tests: [unique, not_null]
+
+  - name: dim_interval
+    description: One row per 5-minute slot in a day (288 slots).
+    columns:
+      - name: interval_of_day
+        data_tests: [unique, not_null]
+
+  - name: fact_dispatch_price
+    description: Price and demand for each region and 5-minute interval. Grain is one row per region per interval.
+    columns:
+      - name: region_code
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_region')
+              field: region_code
+      - name: date_day
+        data_tests:
+          - relationships:
+              to: ref('dim_date')
+              field: date_day
+      - name: interval_of_day
+        data_tests:
+          - relationships:
+              to: ref('dim_interval')
+              field: interval_of_day
+      - name: price_aud_per_mwh
+        data_tests: [not_null]
+      - name: demand_mw
+        data_tests: [not_null]
