@@ -1,0 +1,42 @@
+version: 2
+
+models:
+  - name: stg_price_demand
+    description: Cleaned AEMO 5-minute price and demand. One row per region per interval.
+    columns:
+      - name: region_code
+        description: NEM region code
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ['NSW1', 'QLD1', 'VIC1', 'SA1','TAS1']
+          - relationships:
+              to: ref('stg_region')
+              field: region_code
+      - name: interval_end_at
+        description: End of the 5-minute interval, NEM market time (AEST)
+        data_tests:
+          - not_null
+      - name: interval_date
+        description: Date the interval belongs to, based on its start time
+        data_tests:
+          - not_null
+      - name: price_aud_per_mwh
+        description: Regional reference price in $/MWh
+        data_tests:
+          - not_null
+      - name: demand_mw
+        description: Total grid demand in MW
+        data_tests:
+          - not_null
+
+  - name: stg_region
+    description: One row per NEM region with its full state name.
+    columns:
+      - name: region_code
+        data_tests:
+          - unique
+          - not_null
+      - name: state_name
+        data_tests:
+          - not_null
