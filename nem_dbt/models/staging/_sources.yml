@@ -2,21 +2,16 @@ version: 2
 
 sources:
   - name: raw
-    description: Raw AEMO data loaded by src/load_postgres.py
+    description: Raw AEMO data loaded into PostgreSQL by src/load_postgres.py
     schema: raw
     tables:
       - name: price_demand
-        description: AEMO 5-minute regional price and demand. One row per region per 5-minute interval, in NEM market time (AEST).
-        columns:
-          - name: region
-            description: NEM region code, for example NSW1
-          - name: settlementdate
-            description: End of the 5-minute interval, NEM market time (AEST, no daylight saving)
-          - name: totaldemand
-            description: Total grid demand in MW
-          - name: rrp
-            description: Regional reference price in $/MWh
-          - name: periodtype
-            description: AEMO period type flag
-      - name: region
-        description: Region lookup table created in sql/01_analysis.sql
+        description: AEMO 5-minute regional price and demand, NEM market time (AEST)
+
+  - name: silver
+    description: Cleaned AEMO data built in Databricks by databricks/02_bronze_silver
+    database: workspace
+    schema: silver
+    tables:
+      - name: price_demand
+        description: Typed, de-duplicated and quality-checked price and demand

@@ -1,4 +1,4 @@
 select
-    region     as region_code,
+    region_code,
     state_name
-from {{ source('raw', 'region') }}
+from {{ ref('region') }}

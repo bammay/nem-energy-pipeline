@@ -1,27 +1,34 @@
 with slots as (
 
+    {% if target.type == 'databricks' %}
+    select explode(sequence(0, 287)) as slot_index
+    {% else %}
     select generate_series(0, 287) as slot_index
+    {% endif %}
 
 ),
 
-times as (
+parts as (
 
     select
-        slot_index + 1                                       as interval_of_day,
-        (time '00:00' + slot_index * interval '5 minutes')   as interval_start_time
+        slot_index,
+        cast(floor(slot_index / 12) as int) as hour_of_day,
+        (slot_index % 12) * 5               as minute_of_hour
     from slots
 
 )
 
 select
-    interval_of_day,
-    interval_start_time,
-    extract(hour from interval_start_time)::int as hour_of_day,
+    slot_index + 1 as interval_of_day,
+    lpad(cast(hour_of_day as {{ dbt.type_string() }}), 2, '0')
+        || ':' ||
+        lpad(cast(minute_of_hour as {{ dbt.type_string() }}), 2, '0') as interval_start_time,
+    hour_of_day,
     case
-        when extract(hour from interval_start_time) < 6  then 'Overnight'
-        when extract(hour from interval_start_time) < 10 then 'Morning'
-        when extract(hour from interval_start_time) < 16 then 'Solar hours'
-        when extract(hour from interval_start_time) < 21 then 'Evening peak'
+        when hour_of_day < 6  then 'Overnight'
+        when hour_of_day < 10 then 'Morning'
+        when hour_of_day < 16 then 'Solar hours'
+        when hour_of_day < 21 then 'Evening peak'
         else 'Late evening'
     end as day_period
-from times
+from parts
