@@ -20,4 +20,9 @@ def download_month(month: str) -> None:
 
 
 if __name__ == "__main__":
-    download_month("202610")    
+    months = [
+        "202511", "202512", "202601", "202602", "202603", "202604",
+        "202605", "202606", "202607", "202608", "202609", "202610",
+    ]
+    for month in months:
+        download_month(month)  

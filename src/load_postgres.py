@@ -27,8 +27,20 @@ def load_raw() -> None:
     engine = get_engine()
     with engine.begin() as conn:
         conn.execute(text("CREATE SCHEMA IF NOT EXISTS raw"))
-    df.to_sql("price_demand", engine, schema="raw", if_exists="replace", index=False)
-    print(f"Loaded {len(df):,} rows into raw.price_demand")
+        exists = conn.execute(text("SELECT to_regclass('raw.price_demand')")).scalar()
+        if exists:
+            conn.execute(text("TRUNCATE TABLE raw.price_demand"))
+
+    df.to_sql(
+        "price_demand",
+        engine,
+        schema="raw",
+        if_exists="append",
+        index=False,
+        method="multi",
+        chunksize=10_000,
+    )
+    print(f"Loaded {len(df):,} rows from {len(files)} files into raw.price_demand")
 
 
 if __name__ == "__main__":
