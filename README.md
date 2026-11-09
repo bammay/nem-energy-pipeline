@@ -131,7 +131,7 @@ Predictions for every interval (model warning, rule warning, spike probability) 
 - **South Australia is the most volatile region.** It has 64% of all spikes and the most negative prices (28.5% of intervals), despite having the second-lowest demand. A small grid with a lot of wind and solar swings both ways.
 - **Victoria is the cheapest region on average** ($48.04/MWh), with negative prices in about a quarter of intervals.
 - **Prices hit the market price cap and floor.** NSW and Tasmania both reached $23,200/MWh, and Tasmania hit the -$1,000/MWh floor.
-- **Spikes are seasonal.** January had 500 spikes, the most of any month, from summer heat. About 1,167 fell in May to July (winter evening peaks), and only 200 in August to October.
+- **Spikes are seasonal.** June and July were the busiest months, with more than 550 spikes each, driven by winter evening peaks. January was next with 500, from summer heat. August to October had only 200 between them.
 - **Negative prices peak in spring and early summer** (30.7% of intervals in November 2025), when rooftop solar is strong and demand is mild.
 
 ![Average price by hour, October 2026](docs/price_by_hour.png)
