@@ -1,10 +1,10 @@
 # NEM Electricity Market Pipeline
 
-An end-to-end data pipeline for Australia's National Electricity Market (NEM). It takes a year of AEMO's 5-minute wholesale price and demand data, builds bronze, silver and gold layers in Databricks, models a tested star schema with dbt, and trains a price-spike model tracked in MLflow.
+An end-to-end data pipeline for Australia's National Electricity Market (NEM). It takes a year of AEMO's 5-minute wholesale price and demand data, builds bronze, silver and gold layers in Databricks, models a tested star schema with dbt, trains a price-spike model tracked in MLflow, and presents it all in a three-page Power BI dashboard.
 
 The same dbt project runs on two platforms: PostgreSQL on my laptop and Databricks in the cloud. Both pass the same 25 data tests on the same 525,600 rows.
 
-**Status:** pipeline, star schema and price-spike model done. Power BI dashboard, Azure ingestion, scheduling and CI in progress (see [Roadmap](#roadmap)).
+**Status:** pipeline, star schema, price-spike model and Power BI dashboard done. Azure ingestion, scheduling and CI in progress (see [Roadmap](#roadmap)).
 
 ---
 
@@ -22,7 +22,7 @@ flowchart LR
     G --> H[dbt gold star schema<br/>fact + 3 dimensions]
     H --> I[Price-spike model<br/>scikit-learn, LightGBM, MLflow]
     I --> J[Gold predictions and<br/>feature importance tables]
-    H --> K[Power BI dashboard<br/>in progress]
+    H --> K[Power BI dashboard<br/>3 pages, imported from<br/>Databricks SQL warehouse]
     J --> K
 ```
 
@@ -118,6 +118,31 @@ Predictions for every interval (model warning, rule warning, spike probability) 
 
 ---
 
+## Power BI dashboard
+
+Three pages, imported from the Databricks gold layer through a SQL warehouse. Every figure reconciles with the SQL and notebook results. The report is in [`powerbi/nem_dashboard.pbix`](powerbi/nem_dashboard.pbix), with a [PDF export](powerbi/nem_dashboard.pdf) for anyone without Power BI.
+
+**1. Market overview.** Headline cards, average price by hour for each state, spikes by month, and a summary by state, with filters for state, date range and time of day.
+
+![Market overview](docs/dashboard_overview.png)
+
+**2. Price events.** Daily average price with Power BI anomaly detection, the highest-priced 5-minute intervals, and a decomposition tree that breaks spikes down by state, time of day and month.
+
+![Price events](docs/dashboard_price_events.png)
+
+**3. AI insights.** Key influencers for negative prices, the model's warnings against the persistence rule on the test months, and the model's feature importance.
+
+![AI insights](docs/dashboard_ai_insights.png)
+
+What the dashboard shows:
+- **The duck curve.** Prices fall to about $20/MWh in the middle of the day as solar floods the grid, then jump in the evening. South Australia peaks at about $200/MWh around 7pm on average.
+- **Negative prices are mainly a solar story.** Key influencers finds they are 3.6 times more likely during solar hours, and more likely in SA, VIC, spring and early summer, and on weekends.
+- **Spikes are not only an evening problem.** In SA, the evening peak is the biggest group (36% of its spikes), but a quarter happen overnight.
+- **The market price cap moved.** The highest prices before July 2026 sit at $20,300/MWh, and from July at $23,200/MWh, consistent with the annual cap change on 1 July.
+- **Model against rule, on the test months:** the model raised 39 warnings and caught 19 of 200 spikes (49% precision, 10% recall). The rule raised 200 and caught 92 (46% and 46%).
+
+---
+
 ## Findings (November 2025 to October 2026)
 
 | Region | Avg price ($/MWh) | Max price | Min price | Negative-price intervals | Spikes above $300 | Avg demand (MW) |
@@ -148,6 +173,7 @@ Predictions for every interval (model warning, rule warning, spike probability) 
 | Transformation and testing | dbt Core (dbt-postgres, dbt-databricks), SQL |
 | Governance | Unity Catalog |
 | Machine learning | scikit-learn, XGBoost, LightGBM, imbalanced-learn, MLflow |
+| BI and analytics | Power BI (DAX measures, star-schema model, anomaly detection, decomposition tree, key influencers) |
 | Version control | Git, GitHub, Databricks Git folders |
 
 ---
@@ -183,7 +209,10 @@ nem-energy-pipeline/
 │   ├── seeds/region.csv
 │   ├── tests/                   # singular tests
 │   └── macros/                  # generate_schema_name
-├── docs/                        # charts and lineage diagram
+├── powerbi/
+│   ├── nem_dashboard.pbix       # Power BI report
+│   └── nem_dashboard.pdf        # PDF export
+├── docs/                        # charts, lineage diagram, dashboard screenshots
 ├── .env.example
 └── README.md
 ```
@@ -197,7 +226,7 @@ nem-energy-pipeline/
 ```powershell
 python -m venv .venv
 .venv\Scripts\activate
-pip install pandas requests sqlalchemy psycopg2-binary python-dotenv matplotlib "dbt-core==1.9.*" "dbt-postgres==1.9.*" "dbt-databricks==1.9.*"
+pip install -r requirements.txt
 
 # copy .env.example to .env and fill in your Postgres details
 python src/download_aemo.py
@@ -214,6 +243,10 @@ dbt build
 3. Add a `databricks` target to `~/.dbt/profiles.yml` (host, HTTP path of a SQL warehouse, and a personal access token), then run `dbt build --target databricks` from the `nem_dbt` folder.
 4. Run `databricks/03_price_spike_model` on serverless notebook compute.
 
+### Power BI
+
+Open `powerbi/nem_dashboard.pbix` in Power BI Desktop. To refresh from your own workspace, point the Databricks connection at your SQL warehouse (server hostname and HTTP path) and sign in with a personal access token.
+
 ---
 
 ## Roadmap
@@ -224,7 +257,7 @@ dbt build
 - [x] Bronze and silver Delta tables in Databricks
 - [x] Same dbt project running on Databricks (gold layer)
 - [x] Price-spike model with MLflow tracking, benchmarked against a persistence rule
-- [ ] Power BI dashboard: market overview, price events, AI insights
+- [x] Power BI dashboard: market overview, price events, AI insights
 - [ ] Azure Data Lake Storage and Data Factory for scheduled ingestion
 - [ ] Databricks Jobs to run silver, dbt and the model on a schedule
 - [ ] GitHub Actions: dbt build and SQLFluff on every pull request
