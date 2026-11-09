@@ -1,140 +1,231 @@
-# NEM Energy Pipeline
+# NEM Electricity Market Pipeline
 
-An end-to-end data pipeline for Australia's National Electricity Market (NEM). It collects AEMO's 5-minute wholesale price and demand data, stores it in a database, and models it into a tested star schema with dbt. Built in stages, from a local prototype to a cloud pipeline on Azure.
+An end-to-end data pipeline for Australia's National Electricity Market (NEM). It takes a year of AEMO's 5-minute wholesale price and demand data, builds bronze, silver and gold layers in Databricks, models a tested star schema with dbt, and trains a price-spike model tracked in MLflow.
 
-**Status:** local pipeline complete (ingestion, PostgreSQL, dbt star schema with 25 data tests). Cloud build in progress.
+The same dbt project runs on two platforms: PostgreSQL on my laptop and Databricks in the cloud. Both pass the same 25 data tests on the same 525,600 rows.
 
-## Why this data
-The NEM sets a wholesale electricity price every 5 minutes for each region. Prices swing from negative (when rooftop solar floods the grid) to the market price cap within the same day, which makes the data a good test of a pipeline's ability to handle volume, time zones and extreme values.
+**Status:** pipeline, star schema and price-spike model done. Power BI dashboard, Azure ingestion, scheduling and CI in progress (see [Roadmap](#roadmap)).
 
-## Data source
-AEMO aggregated price and demand data: 5-minute regional reference price (RRP, $/MWh) and total grid demand (MW) for NSW, QLD, VIC, SA and TAS.
+---
 
-Current dataset: October 2026, 44,640 rows (8,928 intervals for each of the five regions, with no gaps).
+## Architecture
 
-All timestamps are in NEM market time (AEST, UTC+10, with no daylight saving).
-
-## Architecture (current)
 ```mermaid
 flowchart LR
-    A[AEMO website] -->|download_aemo.py| B[data/raw CSV files]
-    B -->|load_postgres.py| C[(PostgreSQL: raw schema)]
-    C -->|dbt staging models| D[(analytics_staging)]
-    D -->|dbt mart models| E[(analytics_marts: star schema)]
-    E --> F[SQL analysis]
+    A[AEMO price and demand CSVs<br/>5 regions x 12 months] --> B[download_aemo.py]
+    B --> C[(PostgreSQL<br/>raw.price_demand)]
+    B --> D[Databricks volume]
+    D --> E[Bronze Delta table<br/>raw strings + lineage columns]
+    E --> F[Silver Delta table<br/>typed, cleaned, deduplicated]
+    C --> G[dbt staging views]
+    F --> G
+    G --> H[dbt gold star schema<br/>fact + 3 dimensions]
+    H --> I[Price-spike model<br/>scikit-learn, LightGBM, MLflow]
+    I --> J[Gold predictions and<br/>feature importance tables]
+    H --> K[Power BI dashboard<br/>in progress]
+    J --> K
 ```
 
-## Data model
-Built with dbt in two layers.
+---
 
-**Staging** (views in `analytics_staging`): cleaned copies of the raw tables with clear column names and correct data types.
-- `stg_price_demand`: one row per region per 5-minute interval, with interval start and end times, the interval's date, price, demand and a negative-price flag.
-- `stg_region`: one row per region with its full state name.
+## Data
 
-**Marts** (tables in `analytics_marts`): a star schema for analysis.
+| | |
+|---|---|
+| Source | [AEMO aggregated price and demand data](https://aemo.com.au/energy-systems/electricity/national-electricity-market-nem/data-nem/aggregated-data) |
+| Regions | NSW1, QLD1, VIC1, SA1, TAS1 |
+| Period | November 2025 to October 2026 (12 months) |
+| Grain | One row per region per 5-minute dispatch interval |
+| Volume | 60 files, 525,600 rows (365 days x 288 intervals x 5 regions) |
+| Columns | Settlement date, region, price ($/MWh), total demand (MW) |
 
-| Table | Type | Grain | Rows |
-|---|---|---|---|
-| `fact_dispatch_price` | Fact | One row per region per 5-minute interval | 44,640 |
-| `dim_region` | Dimension | One row per NEM region | 5 |
-| `dim_date` | Dimension | One row per day | 31 |
-| `dim_interval` | Dimension | One row per 5-minute slot in a day, grouped into periods (overnight, morning, solar hours, evening peak, late evening) | 288 |
+All times are NEM market time (AEST, no daylight saving). An interval is dated by its start, so the interval ending at midnight belongs to the previous day.
+
+---
+
+## Medallion layers (Databricks, Unity Catalog)
+
+| Layer | Table | What happens |
+|---|---|---|
+| Bronze | `workspace.bronze.price_demand` | Raw CSVs loaded as strings, plus `_source_file` and `_ingested_at` for lineage |
+| Silver | `workspace.silver.price_demand` | Timestamps parsed, prices and demand cast to decimal, interval start and date derived, nulls removed, duplicates dropped |
+| Gold | `workspace.gold.*` | dbt star schema, model predictions and feature importance |
+
+All tables are Delta, so every load is versioned (`DESCRIBE HISTORY`) and can be queried at an earlier version with time travel.
+
+---
+
+## Data model (gold)
+
+| Table | Grain | Key columns |
+|---|---|---|
+| `fact_dispatch_price` | Region x 5-minute interval | region_code, date_day, interval_of_day, price_aud_per_mwh, demand_mw, is_negative_price |
+| `dim_region` | One row per region | region_code, state_name |
+| `dim_date` | One row per day | date_day, year, month, month_name, day_name, day_of_week, is_weekend |
+| `dim_interval` | One row per 5-minute slot (288) | interval_of_day, hour_of_day, interval_start_time, day_period |
 
 ![dbt lineage](docs/dbt_lineage.png)
 
-### Data tests
-25 dbt tests run on every build, including:
-- No missing prices, demand values, regions or timestamps
-- Region codes limited to the five NEM regions
-- Every fact row links to a valid region, date and time slot (relationship tests)
-- Exactly one row per region per interval
-- No price below the NEM market floor of -$1,000/MWh
-- The fact table keeps every row from staging (no rows lost in joins)
+### Tests
+
+`dbt build` runs 6 models, 1 seed and 25 data tests, and all pass on both PostgreSQL and Databricks:
+
+- Not null, unique and accepted values on keys and measures
+- Relationships from the fact to every dimension
+- One row per region per interval
+- No price below the market floor of -$1,000/MWh
+- Fact row count matches staging, so no rows are lost or duplicated in the joins
+
+---
+
+## Price-spike model
+
+**Question:** will a region's price go above $300/MWh in the next 30 minutes? Batteries, retailers and large energy users act on exactly this.
+
+**Set-up**
+- Label: price above $300/MWh. That's 2,271 of 525,600 intervals (0.43%), so the classes are heavily imbalanced.
+- Features use only information available 30 minutes before the interval: the price 30 minutes earlier, the highest price in the previous hour and the previous 24 hours, the highest price anywhere in the NEM, recent demand and how fast it's rising, hour, day of week and region.
+- Time-based split: trained on November 2025 to July 2026, tested on August to October 2026 (200 spikes). July was held out inside the training period for early stopping and for choosing the warning cut-off, so the test months were never used for tuning.
+- 10 classifiers compared against a simple persistence rule: "spike if the price 30 minutes ago was above $300". Every run is tracked in MLflow.
+
+**Results on the test months**
+
+| Model | PR AUC | ROC AUC |
+|---|---|---|
+| Persistence rule (price 30 minutes ago) | **0.294** | 0.941 |
+| LightGBM, tuned with early stopping | 0.226 | **0.956** |
+| Logistic regression | 0.176 | 0.921 |
+| Random forest | 0.175 | 0.939 |
+| Gradient boosting, tuned | 0.138 | 0.955 |
+| Logistic regression + SMOTE | 0.135 | 0.913 |
+| Extra trees | 0.080 | 0.850 |
+| Gradient boosting | 0.067 | 0.936 |
+| LightGBM | 0.062 | 0.938 |
+| XGBoost | 0.033 | 0.886 |
+| Always predict "no spike" | 0.0015 | 0.500 |
+
+PR AUC is the main metric because spikes are rare. A model that never predicts a spike is right 99.6% of the time and useless.
+
+**What I found**
+- **The first version barely beat chance.** With only calendar and demand features, the best PR AUC was 0.0025 and ROC AUC was about 0.6. The models knew when prices are usually high, but not whether the market was under stress right now. Adding recent-price features lifted PR AUC about 90 times.
+- **The persistence rule still wins at 30 minutes ahead.** At the cut-off chosen on July, the best model raised 39 warnings with 49% precision but caught only 10% of spikes. The rule caught 46% with about the same precision. LightGBM ranks intervals better overall (highest ROC AUC), but the rule is better at finding the most likely spikes.
+- **The gap comes from seasonal shift.** The model scored 0.90 precision and 0.82 recall on July but much lower on spring. About 1,167 spikes fell in May to July and only 200 in August to October, so it learnt patterns from a much busier period than the one it was tested on.
+- **Most useful features:** the highest price in the previous 24 hours ("has today been a stressed day?"), the price 30 minutes earlier, and the highest price anywhere in the NEM.
+
+**Next steps for the model:** add AEMO's pre-dispatch price and demand forecasts as features, and train on several years so the model sees more than one of each season.
+
+Predictions for every interval (model warning, rule warning, spike probability) are saved to `workspace.gold.price_spike_predictions` (525,510 rows: the first 18 intervals of each region have no history). Feature importance is saved to `workspace.gold.spike_feature_importance`.
+
+---
+
+## Findings (November 2025 to October 2026)
+
+| Region | Avg price ($/MWh) | Max price | Min price | Negative-price intervals | Spikes above $300 | Avg demand (MW) |
+|---|---|---|---|---|---|---|
+| NSW1 | 78.79 | 23,200.00 | -999.99 | 7.5% | 324 | 7,439 |
+| QLD1 | 66.03 | 19,727.85 | -245.64 | 11.8% | 119 | 6,186 |
+| SA1 | 69.83 | 20,300.00 | -906.68 | 28.5% | 1,455 | 1,298 |
+| TAS1 | 72.47 | 23,200.00 | -1,000.00 | 5.3% | 161 | 1,016 |
+| VIC1 | 48.04 | 19,069.69 | -969.97 | 24.7% | 212 | 5,049 |
+
+- **South Australia is the most volatile region.** It has 64% of all spikes and the most negative prices (28.5% of intervals), despite having the second-lowest demand. A small grid with a lot of wind and solar swings both ways.
+- **Victoria is the cheapest region on average** ($48.04/MWh), with negative prices in about a quarter of intervals.
+- **Prices hit the market price cap and floor.** NSW and Tasmania both reached $23,200/MWh, and Tasmania hit the -$1,000/MWh floor.
+- **Spikes are seasonal.** January had 500 spikes, the most of any month, from summer heat. About 1,167 fell in May to July (winter evening peaks), and only 200 in August to October.
+- **Negative prices peak in spring and early summer** (30.7% of intervals in November 2025), when rooftop solar is strong and demand is mild.
+
+![Average price by hour, October 2026](docs/price_by_hour.png)
+
+---
 
 ## Tech stack
-- **Python:** pandas, requests, SQLAlchemy, matplotlib
-- **Database:** PostgreSQL 18
-- **Transformation:** dbt Core 1.9 with the PostgreSQL adapter
-- **Tooling:** Git, GitHub, VS Code
 
-## Data engineering practices
-- **Idempotent ingestion:** the download script skips files that already exist, so it can be re-run safely.
-- **Layered design:** raw data lands untouched, then is cleaned in staging and modelled in marts.
-- **Automated data quality:** dbt tests check every build for missing values, duplicates, broken relationships and out-of-range prices.
-- **Correct time handling:** each interval is assigned to the day it starts in, so the interval ending at midnight belongs to the previous day.
-- **Re-runnable SQL:** table creation uses `IF NOT EXISTS` and inserts use `ON CONFLICT DO NOTHING`.
-- **Secrets kept out of code:** database credentials live in a local `.env` file and dbt's `profiles.yml`, both outside version control.
+| Area | Tools |
+|---|---|
+| Ingestion | Python, requests |
+| Storage | PostgreSQL, Databricks volumes, Delta Lake |
+| Processing | pandas, PySpark |
+| Transformation and testing | dbt Core (dbt-postgres, dbt-databricks), SQL |
+| Governance | Unity Catalog |
+| Machine learning | scikit-learn, XGBoost, LightGBM, imbalanced-learn, MLflow |
+| Version control | Git, GitHub, Databricks Git folders |
 
-## Project structure
+---
+
+## Engineering practices
+
+- **Idempotent loads.** The download skips files it already has. The Postgres load truncates and reloads, and SQL uses `IF NOT EXISTS` and `ON CONFLICT`, so rerunning never duplicates data.
+- **One dbt project, two warehouses.** Jinja `target.type` switches between Postgres and Spark SQL where the syntax differs. A custom `generate_schema_name` macro writes to silver and gold on Databricks and to `analytics_*` schemas on Postgres.
+- **Tested before it's trusted.** 25 dbt tests, including reconciliation of row counts between layers.
+- **Honest model evaluation.** Time-based split, a held-out tuning month, features limited to what was known 30 minutes earlier, and a simple baseline every model has to beat.
+- **Secrets stay out of Git.** Credentials live in `.env` and `~/.dbt/profiles.yml`. Raw data stays out of Git too: code goes in the repo, data doesn't.
+
+---
+
+## Repository structure
+
 ```
 nem-energy-pipeline/
 ├── src/
-│   ├── download_aemo.py      # downloads a month of AEMO data for all five regions
-│   └── load_postgres.py      # loads raw CSVs into PostgreSQL (raw.price_demand)
-├── nem_dbt/                  # dbt project
-│   ├── models/
-│   │   ├── staging/          # sources, staging models and their tests
-│   │   └── marts/            # star schema: fact and dimension tables
-│   ├── tests/                # custom SQL data tests
-│   └── dbt_project.yml
+│   ├── download_aemo.py         # downloads monthly AEMO CSVs for 5 regions
+│   └── load_postgres.py         # loads all CSVs into raw.price_demand
 ├── notebooks/
-│   └── 01_explore_aemo.py    # exploration and price-by-hour chart
+│   └── 01_explore_aemo.py       # pandas exploration and quality checks
 ├── sql/
-│   └── 01_analysis.sql       # early analysis queries and the region lookup table
-├── docs/                     # charts and the dbt lineage diagram
+│   └── 01_analysis.sql          # analysis queries on the raw table
+├── databricks/
+│   ├── 01_explore_aemo_spark    # PySpark exploration
+│   ├── 02_bronze_silver         # bronze and silver Delta tables
+│   └── 03_price_spike_model     # features, 10 models, MLflow, predictions
+├── nem_dbt/
+│   ├── models/staging/          # sources, staging views, tests
+│   ├── models/marts/            # star schema, tests
+│   ├── seeds/region.csv
+│   ├── tests/                   # singular tests
+│   └── macros/                  # generate_schema_name
+├── docs/                        # charts and lineage diagram
 ├── .env.example
-├── requirements.txt
 └── README.md
 ```
 
+---
+
 ## How to run
-1. Set up the environment:
-   ```
-   python -m venv .venv
-   .venv\Scripts\activate
-   pip install -r requirements.txt
-   ```
-2. Copy `.env.example` to `.env` and fill in your PostgreSQL details. Create a database called `nem`.
-3. Download and load the data:
-   ```
-   python src/download_aemo.py
-   python src/load_postgres.py
-   ```
-4. Create the region lookup table by running query 5 in `sql/01_analysis.sql`.
-5. Build and test the dbt models:
-   ```
-   cd nem_dbt
-   dbt debug
-   dbt build
-   ```
-   On first use, run `dbt init` or create `profiles.yml` in your user folder with your PostgreSQL connection.
-6. Browse the documentation and lineage:
-   ```
-   dbt docs generate
-   dbt docs serve
-   ```
 
-## Findings (October 2026)
-![Average price by hour of day](docs/price_by_hour.png)
+### Local (PostgreSQL)
 
-| Region | Average price ($/MWh) | Average demand (MW) | Share of intervals with negative prices |
-|---|---|---|---|
-| New South Wales | 127.83 | 6,666 | 0.6% |
-| Queensland | 94.09 | 5,954 | 7.4% |
-| Tasmania | 61.59 | 978 | 18.7% |
-| Victoria | 52.94 | 4,885 | 27.0% |
-| South Australia | 49.70 | 1,057 | 32.9% |
+```powershell
+python -m venv .venv
+.venv\Scripts\activate
+pip install pandas requests sqlalchemy psycopg2-binary python-dotenv matplotlib "dbt-core==1.9.*" "dbt-postgres==1.9.*" "dbt-databricks==1.9.*"
 
-- **NSW's high average came from two short price events.** A single interval hit $23,200/MWh at 7:20am on 10 October, and prices ran between about $10,000 and $23,100/MWh for nearly an hour from 2:20pm on 12 October. Most of the month was far cheaper, which shows how much a few extreme intervals can move an average.
-- **South Australia had negative prices in 32.9% of October's 5-minute intervals,** about 244 hours in total, followed by Victoria at 27.0%. NSW was negative in only 0.6%.
-- **Prices go negative in the middle of the day in SA and VIC** and rise sharply from about 5pm as solar output falls and household demand climbs.
-- **NSW grid demand peaks at 6pm (8,290 MW) and is lowest at midday (4,943 MW),** below its overnight level of about 6,400 MW at 3am, because rooftop solar covers much of the daytime use.
+# copy .env.example to .env and fill in your Postgres details
+python src/download_aemo.py
+python src/load_postgres.py
+
+cd nem_dbt
+dbt build
+```
+
+### Databricks
+
+1. Upload the CSVs from `data/raw` to the volume `/Volumes/workspace/default/aemo_raw/`.
+2. Run `databricks/02_bronze_silver` to build the bronze and silver tables.
+3. Add a `databricks` target to `~/.dbt/profiles.yml` (host, HTTP path of a SQL warehouse, and a personal access token), then run `dbt build --target databricks` from the `nem_dbt` folder.
+4. Run `databricks/03_price_spike_model` on serverless notebook compute.
+
+---
 
 ## Roadmap
-- [x] Download raw AEMO data with Python
-- [x] Load into PostgreSQL and analyse with SQL
-- [x] Model with dbt: staging models, star schema and data tests
-- [ ] Move to Azure: Data Lake Storage and Databricks (bronze, silver and gold layers)
-- [ ] Orchestrate with Azure Data Factory
-- [ ] CI with GitHub Actions
-- [ ] Power BI report
+
+- [x] Download 12 months of AEMO data for all 5 regions
+- [x] Load into PostgreSQL and explore with SQL and pandas
+- [x] dbt star schema with 25 tests on PostgreSQL
+- [x] Bronze and silver Delta tables in Databricks
+- [x] Same dbt project running on Databricks (gold layer)
+- [x] Price-spike model with MLflow tracking, benchmarked against a persistence rule
+- [ ] Power BI dashboard: market overview, price events, AI insights
+- [ ] Azure Data Lake Storage and Data Factory for scheduled ingestion
+- [ ] Databricks Jobs to run silver, dbt and the model on a schedule
+- [ ] GitHub Actions: dbt build and SQLFluff on every pull request
+- [ ] Design decisions write-up (`docs/DESIGN_DECISIONS.md`)
