@@ -1,0 +1,16 @@
+{
+	"name": "adf-nem-shreyas",
+	"properties": {
+		"trustModeClaimForMi": {
+			"value": "Disabled",
+			"editable": true,
+			"isExplicitlySet": false
+		}
+	},
+	"location": "australiaeast",
+	"identity": {
+		"type": "SystemAssigned",
+		"principalId": "aa410b3a-8902-40bb-a729-01eb25a90f97",
+		"tenantId": "6f0ec514-9483-475c-81a4-438e0d646288"
+	}
+}

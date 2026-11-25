@@ -1,0 +1,45 @@
+{
+	"name": "tr_monthly_aemo",
+	"properties": {
+		"annotations": [],
+		"runtimeState": "Started",
+		"pipelines": [
+			{
+				"pipelineReference": {
+					"referenceName": "pl_ingest_aemo_month",
+					"type": "PipelineReference"
+				},
+				"parameters": {
+					"month": "@formatDateTime(addDays(startOfMonth(trigger().scheduledTime), -1), 'yyyyMM')",
+					"regions": [
+						"NSW1",
+						"QLD1",
+						"VIC1",
+						"SA1",
+						"TAS1"
+					]
+				}
+			}
+		],
+		"type": "ScheduleTrigger",
+		"typeProperties": {
+			"recurrence": {
+				"frequency": "Month",
+				"interval": 1,
+				"startTime": "2026-11-24T06:00:00",
+				"timeZone": "E. Australia Standard Time",
+				"schedule": {
+					"minutes": [
+						0
+					],
+					"hours": [
+						6
+					],
+					"monthDays": [
+						2
+					]
+				}
+			}
+		}
+	}
+}

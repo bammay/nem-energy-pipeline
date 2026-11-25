@@ -1,0 +1,69 @@
+{
+	"name": "pl_backfill_aemo",
+	"properties": {
+		"activities": [
+			{
+				"name": "fe_months",
+				"type": "ForEach",
+				"dependsOn": [],
+				"userProperties": [],
+				"typeProperties": {
+					"items": {
+						"value": "@pipeline().parameters.months",
+						"type": "Expression"
+					},
+					"isSequential": true,
+					"activities": [
+						{
+							"name": "run_ingest_month",
+							"type": "ExecutePipeline",
+							"dependsOn": [],
+							"policy": {
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"pipeline": {
+									"referenceName": "pl_ingest_aemo_month",
+									"type": "PipelineReference"
+								},
+								"waitOnCompletion": true,
+								"parameters": {
+									"month": {
+										"value": "@item()",
+										"type": "Expression"
+									},
+									"regions": {
+										"value": "@createArray('NSW1','QLD1','VIC1','SA1','TAS1')",
+										"type": "Expression"
+									}
+								}
+							}
+						}
+					]
+				}
+			}
+		],
+		"parameters": {
+			"months": {
+				"type": "array",
+				"defaultValue": [
+					"202511",
+					"202512",
+					"202601",
+					"202602",
+					"202603",
+					"202604",
+					"202605",
+					"202606",
+					"202607",
+					"202608",
+					"202609"
+				]
+			}
+		},
+		"annotations": [],
+		"lastPublishTime": "2026-11-23T12:25:00Z"
+	},
+	"type": "Microsoft.DataFactory/factories/pipelines"
+}

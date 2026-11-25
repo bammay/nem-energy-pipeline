@@ -1,0 +1,101 @@
+{
+	"name": "pl_ingest_aemo_month",
+	"properties": {
+		"activities": [
+			{
+				"name": "fe_regions",
+				"type": "ForEach",
+				"dependsOn": [],
+				"userProperties": [],
+				"typeProperties": {
+					"items": {
+						"value": "@pipeline().parameters.regions",
+						"type": "Expression"
+					},
+					"isSequential": true,
+					"activities": [
+						{
+							"name": "cp_aemo_to_raw",
+							"type": "Copy",
+							"dependsOn": [],
+							"policy": {
+								"timeout": "0.12:00:00",
+								"retry": 0,
+								"retryIntervalInSeconds": 30,
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"source": {
+									"type": "BinarySource",
+									"storeSettings": {
+										"type": "HttpReadSettings",
+										"requestMethod": "GET",
+										"additionalHeaders": "User-Agent: nem-energy-pipeline/0.1",
+										"requestTimeout": ""
+									},
+									"formatSettings": {
+										"type": "BinaryReadSettings"
+									}
+								},
+								"sink": {
+									"type": "BinarySink",
+									"storeSettings": {
+										"type": "AzureBlobFSWriteSettings"
+									}
+								},
+								"enableStaging": false,
+								"dataIntegrationUnits": 4
+							},
+							"inputs": [
+								{
+									"referenceName": "ds_http_aemo_file",
+									"type": "DatasetReference",
+									"parameters": {
+										"file_name": {
+											"value": "@concat('PRICE_AND_DEMAND_', pipeline().parameters.month, '_', item(), '.csv')",
+											"type": "Expression"
+										}
+									}
+								}
+							],
+							"outputs": [
+								{
+									"referenceName": "ds_adls_raw_file",
+									"type": "DatasetReference",
+									"parameters": {
+										"folder_path": "@concat('aemo/price_demand/month=', pipeline().parameters.month)",
+										"file_name": {
+											"value": "@concat('PRICE_AND_DEMAND_', pipeline().parameters.month, '_', item(), '.csv')",
+											"type": "Expression"
+										}
+									}
+								}
+							]
+						}
+					]
+				}
+			}
+		],
+		"parameters": {
+			"month": {
+				"type": "string",
+				"defaultValue": "202610"
+			},
+			"regions": {
+				"type": "array",
+				"defaultValue": [
+					"NSW1",
+					"QLD1",
+					"VIC1",
+					"SA1",
+					"TAS1"
+				]
+			}
+		},
+		"annotations": [],
+		"lastPublishTime": "2026-11-23T12:17:16Z"
+	},
+	"type": "Microsoft.DataFactory/factories/pipelines"
+}
